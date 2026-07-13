@@ -1,126 +1,434 @@
+"""
+Формування рекомендацій щодо мінімальної конфігурації ресурсів
+на основі прогнозів моделей машинного навчання.
+
+Модуль:
+1. Завантажує навчені моделі прогнозування тоннажу та вузького місця.
+2. Формує простір допустимих конфігурацій ресурсів.
+3. Прогнозує добовий тоннаж для кожної конфігурації.
+4. Перевіряє виконання договірних планів 3000 та 4000 т/добу.
+5. Обирає мінімальну конфігурацію ресурсів із заданим запасом продуктивності.
+"""
+
+from itertools import product
+from pathlib import Path
+
+import joblib
 import pandas as pd
 
 
-DATA_PATH = "data/synthetic/scenario_summary.csv"
+# -----------------------------------------------------------------------------
+# 1. Шляхи до моделей і результатів
+# -----------------------------------------------------------------------------
+
+REG_MODEL_PATH = Path("models/total_tons_model.joblib")
+BOTTLENECK_MODEL_PATH = Path("models/bottleneck_model.joblib")
+FEATURES_PATH = Path("models/model_features_names.joblib")
+
+OUTPUT_DIR = Path("data/ml")
+OUTPUT_PATH = OUTPUT_DIR / "resource_recommendations.csv"
+
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def find_min_resource_configuration(df, target_tons):
-    """
-    Пошук мінімальної конфігурації ресурсів,
-    яка забезпечує виконання планового тоннажу.
-    """
+# -----------------------------------------------------------------------------
+# 2. Основні параметри модуля рекомендацій
+# -----------------------------------------------------------------------------
 
-    candidates = df[
-        df["total_tons"] >= target_tons
-    ].copy()
+# Запас продуктивності враховує прогнозну похибку ML-моделі
+# та природну мінливість транспортно-експедиторського процесу.
+# Конфігурація рекомендується лише тоді, коли прогнозований тоннаж
+# перевищує планове значення щонайменше на 5%.
+SAFETY_MARGIN_PERCENT = 5
 
-    if candidates.empty:
-        return None
 
-    candidates["total_avg_wait"] = (
-        candidates["avg_wait_tare"]
-        + candidates["avg_wait_loader"]
-        + candidates["avg_wait_gross"]
-        + candidates["avg_wait_unload"]
+# -----------------------------------------------------------------------------
+# 3. Перевірка наявності навчених моделей
+# -----------------------------------------------------------------------------
+
+required_files = [
+    REG_MODEL_PATH,
+    BOTTLENECK_MODEL_PATH,
+    FEATURES_PATH,
+]
+
+missing_files = [
+    path
+    for path in required_files
+    if not path.exists()
+]
+
+if missing_files:
+    raise FileNotFoundError(
+        "Не знайдено файли навчених моделей: "
+        + ", ".join(str(path) for path in missing_files)
+        + ". Спочатку виконайте train_model.py."
     )
 
-    candidates = candidates.sort_values(
-        by=[
-            "number_of_trucks",
-            "number_of_loaders",
-            "unload_points",
-            "external_scale_load",
-            "total_avg_wait"
-        ],
-        ascending=[
-            True,
-            True,
-            True,
-            True,
-            True
-        ]
-    )
 
-    return candidates.iloc[0]
+# -----------------------------------------------------------------------------
+# 4. Завантаження моделей і переліку ознак
+# -----------------------------------------------------------------------------
+
+reg_model = joblib.load(REG_MODEL_PATH)
+bottleneck_model = joblib.load(BOTTLENECK_MODEL_PATH)
+features = joblib.load(FEATURES_PATH)
 
 
-def print_recommendation(ship_tons, target_tons, recommendation):
-    print("\n" + "=" * 60)
-    print(f"Судно: {ship_tons} т")
-    print(f"Планова норма: {target_tons} т/добу")
+# -----------------------------------------------------------------------------
+# 5. Простір конфігурацій ресурсів
+# -----------------------------------------------------------------------------
 
-    if recommendation is None:
-        print("Рекомендація: конфігурацію не знайдено")
-        return
-
-    print("Рекомендована мінімальна конфігурація:")
-    print(f"- Самоскиди: {int(recommendation['number_of_trucks'])}")
-    print(f"- Мехлопати: {int(recommendation['number_of_loaders'])}")
-    print(f"- Точки вигрузки: {int(recommendation['unload_points'])}")
-    print(f"- Зовнішнє завантаження вагової: {int(recommendation['external_scale_load'])}%")
-
-    print("\nОчікуваний результат:")
-    print(f"- Тоннаж: {recommendation['total_tons']:.1f} т/добу")
-    print(f"- Виконання плану: {recommendation['target_completion']:.1f}%")
-    print(f"- Середній цикл: {recommendation['average_cycle_time']:.1f} хв")
-
-    print("\nСередні очікування:")
-    print(f"- Тарування: {recommendation['avg_wait_tare']:.2f} хв")
-    print(f"- Навантаження: {recommendation['avg_wait_loader']:.2f} хв")
-    print(f"- Брутто: {recommendation['avg_wait_gross']:.2f} хв")
-    print(f"- Розвантаження: {recommendation['avg_wait_unload']:.2f} хв")
-
-    print("\nУтилізація ресурсів:")
-    print(f"- Мехлопати: {recommendation['loader_utilization']:.1f}%")
-    print(f"- Вагова: {recommendation['scale_utilization']:.1f}%")
-    print(f"- Вигрузка: {recommendation['unload_utilization']:.1f}%")
+TRUCK_VALUES = list(range(4, 21))
+LOADER_VALUES = [1, 2, 3]
+UNLOAD_POINT_VALUES = [1, 2, 3]
+EXTERNAL_SCALE_LOAD_VALUES = [0, 5, 50]
+ROAD_DELAY_VALUES = [0, 5, 15, 30]
 
 
-df = pd.read_csv(DATA_PATH)
+# -----------------------------------------------------------------------------
+# 6. Договірні виробничі плани
+# -----------------------------------------------------------------------------
 
 contract_scenarios = [
     {"ship_tons": 5000, "target_tons": 3000},
     {"ship_tons": 10000, "target_tons": 4000},
 ]
 
-scale_load_scenarios = [0, 30, 60]
+
+# -----------------------------------------------------------------------------
+# 7. Формування всіх допустимих конфігурацій
+# -----------------------------------------------------------------------------
+
+configurations = []
+
+for (
+    number_of_trucks,
+    number_of_loaders,
+    unload_points,
+    external_scale_load,
+    road_delay_percent,
+) in product(
+    TRUCK_VALUES,
+    LOADER_VALUES,
+    UNLOAD_POINT_VALUES,
+    EXTERNAL_SCALE_LOAD_VALUES,
+    ROAD_DELAY_VALUES,
+):
+    configurations.append({
+        "number_of_trucks": number_of_trucks,
+        "number_of_loaders": number_of_loaders,
+        "unload_points": unload_points,
+        "external_scale_load": external_scale_load,
+        "road_delay_percent": road_delay_percent,
+    })
+
+config_df = pd.DataFrame(configurations)
+
+missing_feature_columns = [
+    feature
+    for feature in features
+    if feature not in config_df.columns
+]
+
+if missing_feature_columns:
+    raise ValueError(
+        "У таблиці конфігурацій відсутні ознаки: "
+        + ", ".join(missing_feature_columns)
+    )
+
+
+# -----------------------------------------------------------------------------
+# 8. Прогнозування тоннажу та вузького місця
+# -----------------------------------------------------------------------------
+
+config_df["predicted_total_tons"] = reg_model.predict(
+    config_df[features]
+)
+
+config_df["predicted_bottleneck"] = bottleneck_model.predict(
+    config_df[features]
+)
+
+
+# -----------------------------------------------------------------------------
+# 9. Пошук мінімальної конфігурації ресурсів
+# -----------------------------------------------------------------------------
+
+def find_min_resource_configuration(
+    dataframe,
+    target_tons,
+    external_scale_load,
+    road_delay_percent,
+):
+    """
+    Обирає мінімальну конфігурацію ресурсів, яка за прогнозом
+    забезпечує виконання заданого добового плану із встановленим
+    запасом продуктивності.
+
+    Зовнішнє навантаження вагової та дорожня затримка розглядаються
+    як задані умови, а не як ресурси, що можуть бути змінені підприємством.
+
+    Мінімізація виконується лексикографічно:
+    1. мінімальна кількість самоскидів;
+    2. мінімальна кількість мехлопат;
+    3. мінімальна кількість точок розвантаження;
+    4. найбільший прогнозований тоннаж серед однакових конфігурацій.
+    """
+
+    required_tons_with_margin = (
+        target_tons
+        * (1 + SAFETY_MARGIN_PERCENT / 100)
+    )
+
+    candidates = dataframe[
+        (dataframe["external_scale_load"] == external_scale_load)
+        & (dataframe["road_delay_percent"] == road_delay_percent)
+        & (
+            dataframe["predicted_total_tons"]
+            >= required_tons_with_margin
+        )
+    ].copy()
+
+    if candidates.empty:
+        return None
+
+    candidates = candidates.sort_values(
+        by=[
+            "number_of_trucks",
+            "number_of_loaders",
+            "unload_points",
+            "predicted_total_tons",
+        ],
+        ascending=[True, True, True, False],
+    )
+
+    return candidates.iloc[0]
+
+
+# -----------------------------------------------------------------------------
+# 10. Виведення рекомендації
+# -----------------------------------------------------------------------------
+
+def print_recommendation(
+    ship_tons,
+    target_tons,
+    external_scale_load,
+    road_delay_percent,
+    recommendation,
+):
+    """Виводить рекомендовану конфігурацію та прогнозований результат."""
+
+    print("\n" + "=" * 68)
+    print(f"Обсяг суднової партії         : {ship_tons} т")
+    print(f"Планова норма                 : {target_tons} т/добу")
+    print(f"Необхідний запас              : {SAFETY_MARGIN_PERCENT}%")
+    print(f"Зовнішнє навантаження вагової : {external_scale_load}%")
+    print(f"Дорожня затримка              : до {road_delay_percent}%")
+    print("-" * 68)
+
+    if recommendation is None:
+        print(
+            "Рекомендація: у заданому просторі конфігурацію "
+            "із необхідним запасом не знайдено."
+        )
+        return
+
+    predicted_tons = float(recommendation["predicted_total_tons"])
+    target_completion = (
+        predicted_tons / target_tons * 100
+        if target_tons > 0
+        else None
+    )
+    reserve_tons = predicted_tons - target_tons
+    reserve_percent = (
+        reserve_tons / target_tons * 100
+        if target_tons > 0
+        else None
+    )
+    estimated_days = (
+        ship_tons / predicted_tons
+        if predicted_tons > 0
+        else None
+    )
+
+    print("Рекомендована мінімальна конфігурація:")
+    print(f"  Самоскиди              : {int(recommendation['number_of_trucks'])}")
+    print(f"  Мехлопати              : {int(recommendation['number_of_loaders'])}")
+    print(f"  Точки розвантаження    : {int(recommendation['unload_points'])}")
+
+    print("\nПрогнозований результат:")
+    print(f"  Добовий тоннаж         : {predicted_tons:.1f} т")
+    if target_completion is not None:
+        print(f"  Виконання плану        : {target_completion:.1f}%")
+    print(f"  Запас продуктивності   : {reserve_tons:.1f} т")
+    if reserve_percent is not None:
+        print(f"  Запас відносно плану   : {reserve_percent:.1f}%")
+    if estimated_days is not None:
+        print(f"  Орієнтовна тривалість  : {estimated_days:.2f} доби")
+    else:
+        print("  Орієнтовна тривалість  : не визначено")
+    print(
+        f"  Потенційне вузьке місце: "
+        f"{recommendation['predicted_bottleneck']}"
+    )
+
+
+# -----------------------------------------------------------------------------
+# 11. Формування рекомендацій для виробничих планів
+# -----------------------------------------------------------------------------
 
 recommendations = []
 
-for scenario in contract_scenarios:
-    for scale_load in scale_load_scenarios:
+for contract_scenario in contract_scenarios:
+    for external_scale_load in EXTERNAL_SCALE_LOAD_VALUES:
+        for road_delay_percent in ROAD_DELAY_VALUES:
 
-        filtered_df = df[
-            df["external_scale_load"] == scale_load
-        ]
+            recommendation = find_min_resource_configuration(
+                config_df,
+                contract_scenario["target_tons"],
+                external_scale_load,
+                road_delay_percent,
+            )
 
-        recommendation = find_min_resource_configuration(
-            filtered_df,
-            scenario["target_tons"]
-        )
+            print_recommendation(
+                contract_scenario["ship_tons"],
+                contract_scenario["target_tons"],
+                external_scale_load,
+                road_delay_percent,
+                recommendation,
+            )
 
-        print_recommendation(
-            scenario["ship_tons"],
-            scenario["target_tons"],
-            recommendation
-        )
+            required_tons_with_margin = (
+                contract_scenario["target_tons"]
+                * (1 + SAFETY_MARGIN_PERCENT / 100)
+            )
 
-        print(f"Умова: зовнішнє завантаження вагової {scale_load}%")
+            if recommendation is None:
+                recommendations.append({
+                    "ship_tons": contract_scenario["ship_tons"],
+                    "target_tons": contract_scenario["target_tons"],
+                    "safety_margin_percent": SAFETY_MARGIN_PERCENT,
+                    "required_tons_with_margin": round(
+                        required_tons_with_margin,
+                        1,
+                    ),
+                    "external_scale_load": external_scale_load,
+                    "road_delay_percent": road_delay_percent,
+                    "configuration_found": False,
+                })
+                continue
 
-        if recommendation is not None:
-            row = recommendation.to_dict()
-            row["ship_tons"] = scenario["ship_tons"]
-            row["contract_target_tons"] = scenario["target_tons"]
-            row["selected_external_scale_load"] = scale_load
-            recommendations.append(row)
+            predicted_tons = float(
+                recommendation["predicted_total_tons"]
+            )
+
+            target_completion = (
+                predicted_tons
+                / contract_scenario["target_tons"]
+                * 100
+                if contract_scenario["target_tons"] > 0
+                else None
+            )
+
+            reserve_tons = (
+                predicted_tons
+                - contract_scenario["target_tons"]
+            )
+
+            reserve_percent = (
+                reserve_tons
+                / contract_scenario["target_tons"]
+                * 100
+                if contract_scenario["target_tons"] > 0
+                else None
+            )
+
+            estimated_loading_days = (
+                contract_scenario["ship_tons"]
+                / predicted_tons
+                if predicted_tons > 0
+                else None
+            )
+
+            recommendations.append({
+                "ship_tons": contract_scenario["ship_tons"],
+                "target_tons": contract_scenario["target_tons"],
+                "safety_margin_percent": SAFETY_MARGIN_PERCENT,
+                "required_tons_with_margin": round(
+                    required_tons_with_margin,
+                    1,
+                ),
+                "external_scale_load": external_scale_load,
+                "road_delay_percent": road_delay_percent,
+                "configuration_found": True,
+                "number_of_trucks": int(
+                    recommendation["number_of_trucks"]
+                ),
+                "number_of_loaders": int(
+                    recommendation["number_of_loaders"]
+                ),
+                "unload_points": int(
+                    recommendation["unload_points"]
+                ),
+                "predicted_total_tons": round(
+                    predicted_tons,
+                    1,
+                ),
+                "target_completion_percent": (
+                    round(target_completion, 1)
+                    if target_completion is not None
+                    else None
+                ),
+                "production_reserve_tons": round(
+                    reserve_tons,
+                    1,
+                ),
+                "production_reserve_percent": (
+                    round(reserve_percent, 1)
+                    if reserve_percent is not None
+                    else None
+                ),
+                "estimated_loading_days": (
+                    round(estimated_loading_days, 2)
+                    if estimated_loading_days is not None
+                    else None
+                ),
+                "predicted_bottleneck": (
+                    recommendation["predicted_bottleneck"]
+                ),
+            })
+
+
+# -----------------------------------------------------------------------------
+# 12. Збереження результатів
+# -----------------------------------------------------------------------------
 
 recommendation_df = pd.DataFrame(recommendations)
 
 recommendation_df.to_csv(
-    "data/synthetic/resource_recommendations.csv",
+    OUTPUT_PATH,
     index=False,
-    encoding="utf-8-sig"
+    encoding="utf-8-sig",
 )
 
-print("\nФайл збережено:")
-print("data/synthetic/resource_recommendations.csv")
+
+# -----------------------------------------------------------------------------
+# 13. Контрольний індикатор завершення
+# -----------------------------------------------------------------------------
+
+found_recommendations = int(
+    recommendation_df["configuration_found"]
+    .fillna(False)
+    .sum()
+)
+
+print("\n" + "=" * 68)
+print("Формування рекомендацій успішно завершено")
+print("=" * 68)
+print(f"Перевірено конфігурацій : {len(config_df)}")
+print(f"Сформовано сценаріїв    : {len(recommendation_df)}")
+print(f"Знайдено рекомендацій   : {found_recommendations}")
+print(f"Запас продуктивності    : {SAFETY_MARGIN_PERCENT}%")
+print(f"Збережено файл          : {OUTPUT_PATH}")
+print("=" * 68)

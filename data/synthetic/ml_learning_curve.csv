@@ -1,5 +1,0 @@
-﻿sample_size,mae_total_tons,r2_total_tons,accuracy_plan_completed,f1_plan_completed,accuracy_bottleneck
-100,48.24,0.996,1.0,1.0,0.91
-250,31.03,0.998,1.0,1.0,0.91
-500,27.23,0.999,1.0,1.0,0.922
-750,25.8,0.999,1.0,1.0,0.922

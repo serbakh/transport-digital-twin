@@ -1,0 +1,3 @@
+﻿model,mae,r2,accuracy,f1
+total_tons_regression,22.01,0.999,,
+bottleneck_classification,,,0.987,0.987
