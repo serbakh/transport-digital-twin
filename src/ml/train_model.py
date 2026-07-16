@@ -25,6 +25,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.linear_model import LinearRegression
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
@@ -165,6 +166,14 @@ print(f"Тестова вибірка   : {len(X_test_reg)} сценаріїв")
 print(f"MAE               : {regression_mae:.2f} т")
 print(f"R²                : {regression_r2:.3f}")
 
+# Допоміжна перевірка: лінійна регресія як базова модель,
+# що обґрунтовує вибір Random Forest (нелінійність залежності).
+baseline_model = LinearRegression()
+baseline_model.fit(X_train_reg, y_train_reg)
+baseline_pred = baseline_model.predict(X_test_reg)
+baseline_r2 = r2_score(y_test_reg, baseline_pred)
+
+print(f"R² (Linear Regression, довідково) : {baseline_r2:.3f}")
 
 # -----------------------------------------------------------------------------
 # 6. Класифікація: прогнозування вузького місця
