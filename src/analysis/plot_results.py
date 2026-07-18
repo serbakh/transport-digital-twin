@@ -25,6 +25,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 
+
 # -----------------------------------------------------------------------------
 # 1. Шляхи до вхідних даних і результатів
 # -----------------------------------------------------------------------------
@@ -36,7 +37,17 @@ PLOT_DIR = Path("data/plots")
 # якщо вона ще не існує.
 PLOT_DIR.mkdir(parents=True, exist_ok=True)
 
+#Розміри графіків
+CM = 1 / 2.54
+FIG_W, FIG_H = 16 * CM, 6 * CM  # 16×5 см
 
+plt.rcParams.update({
+    "font.size": 8,
+    "axes.titlesize": 9,
+    "axes.labelsize": 8,
+    "xtick.labelsize": 7,
+    "ytick.labelsize": 7,
+})
 # -----------------------------------------------------------------------------
 # 2. Базові умови для порівняльних графіків
 #
@@ -155,7 +166,7 @@ require_non_empty(
     "добовий тоннаж залежно від кількості самоскидів",
 )
 
-plt.figure(figsize=(8, 5))
+plt.figure(figsize=(FIG_W, FIG_H))
 
 for unload_points in sorted(
     productivity_df["unload_points"].unique()
@@ -177,18 +188,20 @@ for unload_points in sorted(
         subset["number_of_trucks"],
         subset["total_tons"],
         marker="o",
+        markersize=4,
         label=unload_label,
     )
 
-plt.title(
-    "Добовий тоннаж залежно від кількості самоскидів"
-)
-plt.xlabel("Кількість самоскидів")
+
+plt.xlabel("Кількість самоскидів, од.")
 plt.ylabel("Добовий тоннаж, т")
 plt.grid(True)
 
 plt.legend(
-    title="Кількість точок розвантаження"
+    title="Кількість точок розвантаження",
+    loc="center right",
+    fontsize=7,
+    title_fontsize=7,
 )
 
 generated_files.append(
@@ -211,7 +224,7 @@ require_non_empty(
     "середній час очікування за операціями",
 )
 
-plt.figure(figsize=(8, 5))
+plt.figure(figsize=(FIG_W, FIG_H))
 
 wait_columns = {
     "avg_wait_tare": "Тарування",
@@ -225,16 +238,18 @@ for column, label in wait_columns.items():
         wait_df["number_of_trucks"],
         wait_df[column],
         marker="o",
+        markersize=4,
         label=label,
     )
 
-plt.title(
-    "Середній час очікування за основними операціями"
-)
-plt.xlabel("Кількість самоскидів")
+
+plt.xlabel("Кількість самоскидів, од.")
 plt.ylabel("Середній час очікування, хв")
 plt.grid(True)
-plt.legend()
+plt.legend(
+    loc="upper left",
+    fontsize=7,
+)
 
 generated_files.append(
     save_plot("02_average_waiting_times.png")
@@ -257,7 +272,7 @@ require_non_empty(
     "завантаженість виробничих ресурсів",
 )
 
-plt.figure(figsize=(8, 5))
+plt.figure(figsize=(FIG_W, FIG_H))
 
 utilization_columns = {
     "loader_utilization": "Мехлопати",
@@ -270,16 +285,18 @@ for column, label in utilization_columns.items():
         utilization_df["number_of_trucks"],
         utilization_df[column],
         marker="o",
+        markersize=4,
         label=label,
     )
 
-plt.title(
-    "Завантаженість виробничих ресурсів"
-)
-plt.xlabel("Кількість самоскидів")
+
+plt.xlabel("Кількість самоскидів, од.")
 plt.ylabel("Завантаженість ресурсу, %")
 plt.grid(True)
-plt.legend()
+plt.legend(
+    loc="lower right",
+    fontsize=7,
+)
 
 generated_files.append(
     save_plot("03_resource_utilization.png")
@@ -301,7 +318,7 @@ require_non_empty(
     "вплив зовнішнього навантаження вагової",
 )
 
-plt.figure(figsize=(8, 5))
+plt.figure(figsize=(FIG_W, FIG_H))
 
 for external_scale_load in sorted(
     scale_load_df["external_scale_load"].unique()
@@ -315,17 +332,20 @@ for external_scale_load in sorted(
         subset["number_of_trucks"],
         subset["total_tons"],
         marker="o",
+        markersize=3,
         label=f"{external_scale_load}%",
     )
 
-plt.title(
-    "Вплив зовнішнього навантаження вагової "
-    "на добовий тоннаж"
-)
-plt.xlabel("Кількість самоскидів")
+
+plt.xlabel("Кількість самоскидів, од.")
 plt.ylabel("Добовий тоннаж, т")
 plt.grid(True)
-plt.legend(title="Зовнішнє навантаження")
+plt.legend(
+    title="Зовнішнє навантаження",
+    loc="lower right",
+    fontsize=7,
+    title_fontsize=7,
+)
 
 generated_files.append(
     save_plot("04_external_scale_load_effect.png")
@@ -350,7 +370,7 @@ require_non_empty(
     "вплив дорожніх затримок",
 )
 
-plt.figure(figsize=(8, 5))
+plt.figure(figsize=(FIG_W, FIG_H))
 
 for road_delay_percent in sorted(
     road_delay_df["road_delay_percent"].unique()
@@ -364,20 +384,64 @@ for road_delay_percent in sorted(
         subset["number_of_trucks"],
         subset["total_tons"],
         marker="o",
+        markersize=4,
         label=f"до {road_delay_percent}%",
     )
 
-plt.title(
-    "Вплив дорожніх затримок на добовий тоннаж"
-)
-plt.xlabel("Кількість самоскидів")
+
+plt.xlabel("Кількість самоскидів, од.")
 plt.ylabel("Добовий тоннаж, т")
 plt.grid(True)
-plt.legend(title="Дорожня затримка")
+plt.legend(
+    title="Дорожня затримка",
+    loc="lower right",
+    fontsize=7,
+    title_fontsize=7,
+)
 
 generated_files.append(
     save_plot("05_road_delay_effect.png")
 )
+
+# -----------------------------------------------------------------------------
+# 10. Графіки впливу обсягу синтетичних даних на якість моделей
+# -----------------------------------------------------------------------------
+
+ML_DIR = Path("data/ml")
+
+learning_df = pd.read_csv(ML_DIR / "ml_learning_curve.csv")
+
+require_non_empty(learning_df, "вплив обсягу синтетичних даних")
+
+plt.figure(figsize=(8 * CM, 5 * CM))
+plt.plot(
+    learning_df["sample_size"],
+    learning_df["mae_total_tons"],
+    marker="o",
+    markersize=4,
+)
+plt.xlabel("Кількість сценаріїв у навчальній вибірці, од.")
+plt.ylabel("MAE прогнозу тоннажу, т")
+plt.grid(True)
+plt.tight_layout()
+plt.savefig(ML_DIR / "ml_learning_mae.png", dpi=300, bbox_inches="tight")
+plt.close()
+generated_files.append(ML_DIR / "ml_learning_mae.png")
+
+plt.figure(figsize=(8 * CM, 5 * CM))
+plt.plot(
+    learning_df["sample_size"],
+    learning_df["accuracy_bottleneck"],
+    marker="o",
+    markersize=4,
+)
+plt.xlabel("Кількість сценаріїв у навчальній вибірці, од.")
+plt.ylabel("Accuracy")
+plt.grid(True)
+plt.tight_layout()
+plt.savefig(ML_DIR / "ml_learning_bottleneck.png", dpi=300, bbox_inches="tight")
+plt.close()
+generated_files.append(ML_DIR / "ml_learning_bottleneck.png")
 
 
 # -----------------------------------------------------------------------------
